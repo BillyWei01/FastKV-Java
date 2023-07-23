@@ -535,7 +535,9 @@ public class FastKV {
                     return (String) value;
                 }
                 String str = getStringFromFile(c);
-                if (!str.isEmpty()) {
+                if (str == null) {
+                    remove(key);
+                } else if (!str.isEmpty()) {
                     bigValueCache.put(key, str);
                 }
                 return str;
@@ -553,13 +555,11 @@ public class FastKV {
                 return new String(cache, StandardCharsets.UTF_8);
             }
             byte[] bytes = Util.getBytes(new File(path + name, fileName));
-            if (bytes != null) {
-                return (bytes.length == 0) ? "" : new String(bytes, StandardCharsets.UTF_8);
-            }
+            return bytes != null ? new String(bytes, StandardCharsets.UTF_8) : null;
         } catch (Exception e) {
             error(e);
         }
-        return "";
+        return null;
     }
 
     public byte[] getArray(String key) {
@@ -592,12 +592,11 @@ public class FastKV {
             return cache;
         }
         try {
-            byte[] a = Util.getBytes(new File(path + name, fileName));
-            return a != null ? a : EMPTY_ARRAY;
+            return Util.getBytes(new File(path + name, fileName));
         } catch (Exception e) {
             error(e);
         }
-        return EMPTY_ARRAY;
+        return null;
     }
 
     @SuppressWarnings("unchecked")
@@ -827,6 +826,7 @@ public class FastKV {
             final String oldFileName;
             data.remove(key);
             bigValueCache.remove(key);
+            externalCache.remove(key);
             byte type = container.getType();
             if (type <= DataType.DOUBLE) {
                 int keySize = FastBuffer.getStringSize(key);
@@ -906,7 +906,9 @@ public class FastKV {
                     value = oc.external ? getObjectFromFile(oc) : ((ObjectContainer) c).value;
                     break;
             }
-            result.put(key, value);
+            if (value != null) {
+                result.put(key, value);
+            }
         }
         return result;
     }

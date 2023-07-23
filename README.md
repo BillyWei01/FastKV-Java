@@ -24,21 +24,21 @@ FastKV有以下特点：
    - 支持ByteArray (byte[])。
    - 支持存储自定义对象。
    - 内置Set<String>的编码器 (兼容SharePreferences)。
-4. 支持内容加密
-   - 支持注入加密解密的实现，在数据写入磁盘之前执行加密，在数据加载时解密。
-   - 解密处理在数据加载阶段，后续读取时可直接访问到解析好的数据，加解密处理几乎不影响读取效率。
-5. 支持多进程
-   - 项目提供了支持多进程的存储类（MPFastKV)。
-   - 支持监听文件内容变化，其中一个进程修改文件，所有进程皆可感知。
-6. 方便易用
+4. 方便易用
    - FastKV提供了了丰富的API接口，开箱即用。
    - 提供的接口其中包括getAll()和putAll()方法，
      所以很方便迁移SharePreferences等框架的数据到FastKV, 当然，迁移FastKV的数据到其他框架也很简单。
-7. 稳定可靠
+5. 稳定可靠
    - 通过double-write等方法确保数据的完整性。
    - 在API抛IO异常时自动降级处理。
-8. 代码精简
+6. 代码精简
    - FastKV由纯Java实现，编译成jar包后体积只有数十K。
+
+相对Android版本，JDK版本不支持多进程和内容加密。<br>
+多进程一般用在Android客户端主进程和服务进程之间的公共存储，所以纯JDK版本就没这个环境了；
+内容加密通常也是客户端的需求, 所以JDK版本暂时不加这个功能了，<br>
+毕竟增加功能的同时会增加代码复杂度，如果后面确实需要再补充。
+
    
 ## 2. 使用方法
 
@@ -46,7 +46,7 @@ FastKV有以下特点：
 
 ```gradle
 dependencies {
-    implementation 'io.github.billywei01:fastkv-java:1.2.0'
+    implementation 'io.github.billywei01:fastkv-java:1.2.1'
 }
 ```
 
