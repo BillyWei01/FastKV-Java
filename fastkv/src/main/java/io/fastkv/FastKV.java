@@ -535,14 +535,15 @@ public class FastKV {
                     return (String) value;
                 }
                 String str = getStringFromFile(c);
-                if (str == null) {
+                if (str == null || str.isEmpty()) {
                     remove(key);
-                } else if (!str.isEmpty()) {
+                } else {
                     bigValueCache.put(key, str);
+                    return str;
                 }
-                return str;
+            } else {
+                return (String) c.value;
             }
-            return (String) c.value;
         }
         return defValue;
     }
@@ -556,7 +557,7 @@ public class FastKV {
             }
             byte[] bytes = Util.getBytes(new File(path + name, fileName));
             return bytes != null ? new String(bytes, StandardCharsets.UTF_8) : null;
-        } catch (Exception e) {
+        } catch (Throwable e) {
             error(e);
         }
         return null;
@@ -575,12 +576,15 @@ public class FastKV {
                     return (byte[]) value;
                 }
                 byte[] bytes = getArrayFromFile(c);
-                if (bytes != null && bytes.length != 0) {
+                if (bytes == null || bytes.length == 0) {
+                    remove(key);
+                } else {
                     bigValueCache.put(key, bytes);
+                    return bytes;
                 }
-                return bytes;
+            } else {
+                return (byte[]) c.value;
             }
-            return (byte[]) c.value;
         }
         return defValue;
     }
@@ -593,7 +597,7 @@ public class FastKV {
         }
         try {
             return Util.getBytes(new File(path + name, fileName));
-        } catch (Exception e) {
+        } catch (Throwable e) {
             error(e);
         }
         return null;
@@ -611,10 +615,11 @@ public class FastKV {
                 Object obj = getObjectFromFile(c);
                 if (obj != null) {
                     bigValueCache.put(key, obj);
+                    return (T) obj;
                 }
-                return (T) obj;
+            } else {
+                return (T) c.value;
             }
-            return (T) c.value;
         }
         return null;
     }
@@ -637,7 +642,7 @@ public class FastKV {
             } else {
                 warning(new Exception("Read object data failed"));
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             error(e);
         }
         return null;
@@ -1456,10 +1461,21 @@ public class FastKV {
             return wrapArray(key, value, type);
         } else {
             String fileName = Util.randomName();
-            info("save large value, key:" + key + ", size:" + value.length + ", fileName:" + fileName);
+            info("Large value, key:" + key + ", size:" + value.length);
             File file = new File(path + name, fileName);
+            // The reference of 'value' will not be gc before 'saveBytes' finish,
+            // So before the value saving to disk, it could be read with 'externalCache'.
             externalCache.put(fileName, value);
-            externalExecutor.execute(key, () -> Util.saveBytes(file, value));
+            externalExecutor.execute(key, () -> {
+                long startTime = System.nanoTime();
+                if (!Util.saveBytes(new File(path + name, fileName), value)) {
+                    info("Write large value with key:" + key + " failed");
+                } else {
+                    long t = System.nanoTime() - startTime;
+                    String formatTime = (t / 1000000) + "." + ((t % 1000000) / 10000);
+                    info("Write large value with key:" + key + ", use time:" + formatTime + " ms");
+                }
+            });
             tempExternalName = fileName;
             byte[] fileNameBytes = new byte[Util.NAME_SIZE];
             //noinspection deprecation
@@ -1663,9 +1679,9 @@ public class FastKV {
         }
     }
 
-    private void error(Exception e) {
+    private void error(Throwable t) {
         if (logger != null) {
-            logger.e(name, e);
+            logger.e(name, new Exception(t));
         }
     }
 
