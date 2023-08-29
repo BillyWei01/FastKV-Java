@@ -92,6 +92,7 @@ class Util {
             try {
                 accessFile.setLength(bytes.length);
                 accessFile.write(bytes);
+                accessFile.getFD().sync();
             } finally {
                 closeQuietly(accessFile);
             }

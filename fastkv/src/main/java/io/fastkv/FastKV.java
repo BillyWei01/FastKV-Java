@@ -1032,15 +1032,14 @@ public class FastKV {
                 RandomAccessFile accessFile = new RandomAccessFile(tmpFile, "rw");
                 accessFile.setLength(dataEnd);
                 accessFile.write(fastBuffer.hb, 0, dataEnd);
+                accessFile.getFD().sync();
                 accessFile.close();
                 File cFile = new File(path, name + C_SUFFIX);
-                if (!cFile.exists() || cFile.delete()) {
-                    if (tmpFile.renameTo(cFile)) {
-                        clearDeletedFiles();
-                        return true;
-                    } else {
-                        warning(new Exception("rename failed"));
-                    }
+                if (tmpFile.renameTo(cFile)) {
+                    clearDeletedFiles();
+                    return true;
+                } else {
+                    warning(new Exception("rename failed"));
                 }
             }
         } catch (Exception e) {
@@ -1467,13 +1466,8 @@ public class FastKV {
             // So before the value saving to disk, it could be read with 'externalCache'.
             externalCache.put(fileName, value);
             externalExecutor.execute(key, () -> {
-                long startTime = System.nanoTime();
                 if (!Util.saveBytes(new File(path + name, fileName), value)) {
                     info("Write large value with key:" + key + " failed");
-                } else {
-                    long t = System.nanoTime() - startTime;
-                    String formatTime = (t / 1000000) + "." + ((t % 1000000) / 10000);
-                    info("Write large value with key:" + key + ", use time:" + formatTime + " ms");
                 }
             });
             tempExternalName = fileName;
@@ -1509,22 +1503,31 @@ public class FastKV {
         }
     }
 
-    private void mergeInvalids() {
-        int i = invalids.size() - 1;
-        Segment p = invalids.get(i);
-        while (i > 0) {
-            Segment q = invalids.get(--i);
-            if (p.start == q.end) {
-                q.end = p.end;
-                invalids.remove(i + 1);
+    static void mergeInvalids(ArrayList<Segment> invalids) {
+        int index = 0;
+        Segment p = invalids.get(0);
+        int n = invalids.size();
+        for (int i = 1; i < n; i++) {
+            Segment q = invalids.get(i);
+            if (q.start == p.end) {
+                p.end = q.end;
+            } else {
+                index++;
+                if (index != i) {
+                    invalids.set(index, q);
+                }
+                p = q;
             }
-            p = q;
+        }
+        index++;
+        if (n > index) {
+            invalids.subList(index, n).clear();
         }
     }
 
     void gc(int allocate) {
         Collections.sort(invalids);
-        mergeInvalids();
+        mergeInvalids(invalids);
 
         final Segment head = invalids.get(0);
         final int gcStart = head.start;
@@ -1658,7 +1661,7 @@ public class FastKV {
         invalids.clear();
     }
 
-    private static class Segment implements Comparable<Segment> {
+    final static class Segment implements Comparable<Segment> {
         int start;
         int end;
 
