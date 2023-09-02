@@ -37,9 +37,9 @@ public class FastKV {
     private static final int BASE_GC_BYTES_THRESHOLD = 4096;
     private final int INTERNAL_LIMIT = FastKVConfig.internalLimit;
 
-    private static final int PAGE_SIZE = Util.getPageSize();
-    private static final int DOUBLE_LIMIT = Math.max(PAGE_SIZE << 1, 1 << 14);
-    private static final int TRUNCATE_THRESHOLD = DOUBLE_LIMIT << 1;
+    private static final int PAGE_SIZE = Utils.getPageSize();
+    private static final int DOUBLE_LIMIT = 1 << 15;
+    private static final int TRUNCATE_THRESHOLD = 1 << 15;
 
     private final String path;
     private final String name;
@@ -143,7 +143,7 @@ public class FastKV {
         File aFile = new File(path, name + A_SUFFIX);
         File bFile = new File(path, name + B_SUFFIX);
         try {
-            if (!Util.makeFileIfNotExist(aFile) || !Util.makeFileIfNotExist(bFile)) {
+            if (!Utils.makeFileIfNotExist(aFile) || !Utils.makeFileIfNotExist(bFile)) {
                 error(new Exception(OPEN_FILE_FAILED));
                 toBlockingMode();
                 return;
@@ -312,7 +312,7 @@ public class FastKV {
             buffer = new FastBuffer(new byte[capacity]);
             fastBuffer = buffer;
         }
-        Util.readBytes(srcFile, buffer.hb, fileSize);
+        Utils.readBytes(srcFile, buffer.hb, fileSize);
         int dataSize = buffer.getInt();
         long sum = buffer.getLong();
         dataEnd = DATA_START + dataSize;
@@ -330,20 +330,21 @@ public class FastKV {
         File aFile = new File(path, name + A_SUFFIX);
         File bFile = new File(path, name + B_SUFFIX);
         try {
-            if (!Util.makeFileIfNotExist(aFile) || !Util.makeFileIfNotExist(bFile)) {
+            if (!Utils.makeFileIfNotExist(aFile) || !Utils.makeFileIfNotExist(bFile)) {
                 throw new Exception(OPEN_FILE_FAILED);
             }
             RandomAccessFile aAccessFile = new RandomAccessFile(aFile, "rw");
-            RandomAccessFile bAccessFile = new RandomAccessFile(bFile, "rw");
             aAccessFile.setLength(fileLen);
-            bAccessFile.setLength(fileLen);
             aChannel = aAccessFile.getChannel();
-            bChannel = bAccessFile.getChannel();
             aBuffer = aChannel.map(FileChannel.MapMode.READ_WRITE, 0, fileLen);
             aBuffer.order(ByteOrder.LITTLE_ENDIAN);
+            aBuffer.put(buffer.hb, 0, dataEnd);
+
+            RandomAccessFile bAccessFile = new RandomAccessFile(bFile, "rw");
+            bAccessFile.setLength(fileLen);
+            bChannel = bAccessFile.getChannel();
             bBuffer = bChannel.map(FileChannel.MapMode.READ_WRITE, 0, fileLen);
             bBuffer.order(ByteOrder.LITTLE_ENDIAN);
-            aBuffer.put(buffer.hb, 0, dataEnd);
             bBuffer.put(buffer.hb, 0, dataEnd);
             return true;
         } catch (Exception e) {
@@ -419,7 +420,7 @@ public class FastKV {
                 } else {
                     int size = buffer.getShort() & 0xFFFF;
                     boolean external = (info & DataType.EXTERNAL_MASK) != 0;
-                    if (external && size != Util.NAME_SIZE) {
+                    if (external && size != Utils.NAME_SIZE) {
                         throw new IllegalStateException("name size not match");
                     }
                     switch (type) {
@@ -555,7 +556,7 @@ public class FastKV {
             if (cache != null) {
                 return new String(cache, StandardCharsets.UTF_8);
             }
-            byte[] bytes = Util.getBytes(new File(path + name, fileName));
+            byte[] bytes = Utils.getBytes(new File(path + name, fileName));
             return bytes != null ? new String(bytes, StandardCharsets.UTF_8) : null;
         } catch (Throwable e) {
             error(e);
@@ -596,7 +597,7 @@ public class FastKV {
             return cache;
         }
         try {
-            return Util.getBytes(new File(path + name, fileName));
+            return Utils.getBytes(new File(path + name, fileName));
         } catch (Throwable e) {
             error(e);
         }
@@ -628,7 +629,7 @@ public class FastKV {
         String fileName = (String) c.value;
         byte[] cache = (byte[]) externalCache.get(fileName);
         try {
-            byte[] bytes = cache != null ? cache : Util.getBytes(new File(path + name, fileName));
+            byte[] bytes = cache != null ? cache : Utils.getBytes(new File(path + name, fileName));
             if (bytes != null) {
                 int tagSize = bytes[0] & 0xFF;
                 String tag = new String(bytes, 1, tagSize, StandardCharsets.UTF_8);
@@ -855,7 +856,7 @@ public class FastKV {
             removeStart = 0;
             if (oldFileName != null) {
                 if (writingMode == NON_BLOCKING) {
-                    FastKVConfig.getExecutor().execute(() -> Util.deleteFile(new File(path + name, oldFileName)));
+                    FastKVConfig.getExecutor().execute(() -> Utils.deleteFile(new File(path + name, oldFileName)));
                 } else {
                     deletedFiles.add(oldFileName);
                 }
@@ -1028,14 +1029,9 @@ public class FastKV {
     private synchronized boolean writeToCFile() {
         try {
             File tmpFile = new File(path, name + TEMP_SUFFIX);
-            if (Util.makeFileIfNotExist(tmpFile)) {
-                RandomAccessFile accessFile = new RandomAccessFile(tmpFile, "rw");
-                accessFile.setLength(dataEnd);
-                accessFile.write(fastBuffer.hb, 0, dataEnd);
-                accessFile.getFD().sync();
-                accessFile.close();
+            if (Utils.saveBytes(tmpFile, fastBuffer.hb, dataEnd)) {
                 File cFile = new File(path, name + C_SUFFIX);
-                if (tmpFile.renameTo(cFile)) {
+                if (Utils.renameFile(tmpFile, cFile)) {
                     clearDeletedFiles();
                     return true;
                 } else {
@@ -1051,7 +1047,7 @@ public class FastKV {
     private void clearDeletedFiles() {
         if (!deletedFiles.isEmpty()) {
             for (String oldFileName : deletedFiles) {
-                FastKVConfig.getExecutor().execute(() -> Util.deleteFile(new File(path + name, oldFileName)));
+                FastKVConfig.getExecutor().execute(() -> Utils.deleteFile(new File(path + name, oldFileName)));
             }
             deletedFiles.clear();
         }
@@ -1059,8 +1055,8 @@ public class FastKV {
 
     private void deleteCFiles() {
         try {
-            Util.deleteFile(new File(path, name + C_SUFFIX));
-            Util.deleteFile(new File(path, name + TEMP_SUFFIX));
+            Utils.deleteFile(new File(path, name + C_SUFFIX));
+            Utils.deleteFile(new File(path, name + TEMP_SUFFIX));
         } catch (Exception e) {
             error(e);
         }
@@ -1068,8 +1064,8 @@ public class FastKV {
 
     private void toBlockingMode() {
         writingMode = ASYNC_BLOCKING;
-        Util.closeQuietly(aChannel);
-        Util.closeQuietly(bChannel);
+        Utils.closeQuietly(aChannel);
+        Utils.closeQuietly(bChannel);
         aChannel = null;
         bChannel = null;
         aBuffer = null;
@@ -1086,7 +1082,7 @@ public class FastKV {
             }
         }
         clearData();
-        Util.deleteFile(new File(path + name));
+        Utils.deleteFile(new File(path + name));
     }
 
     private void resetBuffer(MappedByteBuffer buffer) throws IOException {
@@ -1373,7 +1369,7 @@ public class FastKV {
             }
             if (oldFileName != null) {
                 if (writingMode == NON_BLOCKING) {
-                    FastKVConfig.getExecutor().execute(() -> Util.deleteFile(new File(path + name, oldFileName)));
+                    FastKVConfig.getExecutor().execute(() -> Utils.deleteFile(new File(path + name, oldFileName)));
                 } else {
                     deletedFiles.add(oldFileName);
                 }
@@ -1404,7 +1400,7 @@ public class FastKV {
             boolean external = tempExternalName != null;
             if (external) {
                 bigValueCache.put(key, value);
-                size = Util.NAME_SIZE;
+                size = Utils.NAME_SIZE;
                 v = tempExternalName;
                 tempExternalName = null;
             } else {
@@ -1436,7 +1432,7 @@ public class FastKV {
             if (external) {
                 bigValueCache.put(key, value);
                 c.value = tempExternalName;
-                c.valueSize = Util.NAME_SIZE;
+                c.valueSize = Utils.NAME_SIZE;
                 tempExternalName = null;
             } else {
                 c.value = value;
@@ -1446,7 +1442,7 @@ public class FastKV {
             checkGC();
             if (oldFileName != null) {
                 if (writingMode == NON_BLOCKING) {
-                    FastKVConfig.getExecutor().execute(() -> Util.deleteFile(new File(path + name, oldFileName)));
+                    FastKVConfig.getExecutor().execute(() -> Utils.deleteFile(new File(path + name, oldFileName)));
                 } else {
                     deletedFiles.add(oldFileName);
                 }
@@ -1459,21 +1455,21 @@ public class FastKV {
         if (value.length < INTERNAL_LIMIT) {
             return wrapArray(key, value, type);
         } else {
-            String fileName = Util.randomName();
+            String fileName = Utils.randomName();
             info("Large value, key:" + key + ", size:" + value.length);
             File file = new File(path + name, fileName);
             // The reference of 'value' will not be gc before 'saveBytes' finish,
             // So before the value saving to disk, it could be read with 'externalCache'.
             externalCache.put(fileName, value);
             externalExecutor.execute(key, () -> {
-                if (!Util.saveBytes(new File(path + name, fileName), value)) {
+                if (!Utils.saveBytes(new File(path + name, fileName), value)) {
                     info("Write large value with key:" + key + " failed");
                 }
             });
             tempExternalName = fileName;
-            byte[] fileNameBytes = new byte[Util.NAME_SIZE];
+            byte[] fileNameBytes = new byte[Utils.NAME_SIZE];
             //noinspection deprecation
-            fileName.getBytes(0, Util.NAME_SIZE, fileNameBytes, 0);
+            fileName.getBytes(0, Utils.NAME_SIZE, fileNameBytes, 0);
             return wrapArray(key, fileNameBytes, (byte) (type | DataType.EXTERNAL_MASK));
         }
     }
@@ -1598,7 +1594,7 @@ public class FastKV {
         Collection<BaseContainer> values = data.values();
         for (BaseContainer c : values) {
             if (c.offset > gcStart) {
-                int index = Util.binarySearch(srcToShift, c.offset);
+                int index = Utils.binarySearch(srcToShift, c.offset);
                 int shift = srcToShift[(index << 1) + 1];
                 c.offset -= shift;
                 if (c.getType() >= DataType.STRING) {

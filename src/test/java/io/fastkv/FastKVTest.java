@@ -624,7 +624,7 @@ public class FastKVTest {
         if (file.exists()) {
             RandomAccessFile accessFile = new RandomAccessFile(file, "rw");
             FileChannel channel = accessFile.getChannel();
-            MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, Util.getPageSize());
+            MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, Utils.getPageSize());
             int index = (int) (System.currentTimeMillis() % 30);
             String name = fileName.endsWith(".kva") ? "A" : "B";
             System.out.println("Damage " + name + " file's byte at index:" + index);

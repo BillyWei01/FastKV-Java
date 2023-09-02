@@ -5,7 +5,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.security.SecureRandom;
 
-class Util {
+class Utils {
     private static class Holder {
         static final SecureRandom random = new SecureRandom();
         static final char[] digits = {
@@ -83,25 +83,30 @@ class Util {
     }
 
     static boolean saveBytes(File file, byte[] bytes) {
+        return saveBytes(file, bytes, bytes.length);
+    }
+
+    static boolean saveBytes(File file, byte[] bytes, int len) {
         try {
             File tmpFile = new File(file.getParent(), file.getName() + ".tmp");
             if (!makeFileIfNotExist(tmpFile)) {
                 return false;
             }
-            RandomAccessFile accessFile = new RandomAccessFile(tmpFile, "rw");
-            try {
-                accessFile.setLength(bytes.length);
-                accessFile.write(bytes);
+            try (RandomAccessFile accessFile = new RandomAccessFile(tmpFile, "rw")) {
+                accessFile.setLength(len);
+                accessFile.write(bytes, 0, len);
                 accessFile.getFD().sync();
-            } finally {
-                closeQuietly(accessFile);
             }
-            if (!file.exists() || file.delete()) {
-                return tmpFile.renameTo(file);
-            }
-        } catch (Throwable ignore) {
+            return renameFile(tmpFile, file);
+        } catch (Exception ignore) {
         }
         return false;
+    }
+    static boolean renameFile(File srcFile, File dstFile) {
+        if (srcFile.renameTo(dstFile)) {
+            return true;
+        }
+        return (!dstFile.exists() || dstFile.delete()) && srcFile.renameTo(dstFile);
     }
 
     static void closeQuietly(Closeable closeable) {

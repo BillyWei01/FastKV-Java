@@ -38,7 +38,7 @@ public class HexViewer {
             throw new IllegalArgumentException("file too large, path:" + file.getPath());
         }
         byte[] bytes = new byte[(int) length];
-        Util.readBytes(file, bytes, (int) readCount);
+        Utils.readBytes(file, bytes, (int) readCount);
         return bytes;
     }
 
