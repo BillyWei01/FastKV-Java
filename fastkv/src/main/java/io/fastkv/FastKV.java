@@ -326,21 +326,23 @@ public class FastKV {
     }
 
     private boolean writeToABFile(FastBuffer buffer) {
-        int fileLen = buffer.hb.length;
-        File aFile = new File(path, name + A_SUFFIX);
-        File bFile = new File(path, name + B_SUFFIX);
+        RandomAccessFile aAccessFile = null;
+        RandomAccessFile bAccessFile = null;
         try {
+            int fileLen = buffer.hb.length;
+            File aFile = new File(path, name + A_SUFFIX);
+            File bFile = new File(path, name + B_SUFFIX);
             if (!Utils.makeFileIfNotExist(aFile) || !Utils.makeFileIfNotExist(bFile)) {
                 throw new Exception(OPEN_FILE_FAILED);
             }
-            RandomAccessFile aAccessFile = new RandomAccessFile(aFile, "rw");
+            aAccessFile = new RandomAccessFile(aFile, "rw");
             aAccessFile.setLength(fileLen);
             aChannel = aAccessFile.getChannel();
             aBuffer = aChannel.map(FileChannel.MapMode.READ_WRITE, 0, fileLen);
             aBuffer.order(ByteOrder.LITTLE_ENDIAN);
             aBuffer.put(buffer.hb, 0, dataEnd);
 
-            RandomAccessFile bAccessFile = new RandomAccessFile(bFile, "rw");
+            bAccessFile = new RandomAccessFile(bFile, "rw");
             bAccessFile.setLength(fileLen);
             bChannel = bAccessFile.getChannel();
             bBuffer = bChannel.map(FileChannel.MapMode.READ_WRITE, 0, fileLen);
@@ -348,6 +350,12 @@ public class FastKV {
             bBuffer.put(buffer.hb, 0, dataEnd);
             return true;
         } catch (Exception e) {
+            Utils.closeQuietly(aAccessFile);
+            Utils.closeQuietly(bAccessFile);
+            aChannel = null;
+            bChannel = null;
+            aBuffer = null;
+            bBuffer = null;
             error(e);
         }
         return false;
@@ -1029,7 +1037,12 @@ public class FastKV {
     private synchronized boolean writeToCFile() {
         try {
             File tmpFile = new File(path, name + TEMP_SUFFIX);
-            if (Utils.saveBytes(tmpFile, fastBuffer.hb, dataEnd)) {
+            if (Utils.makeFileIfNotExist(tmpFile)) {
+                try (RandomAccessFile accessFile = new RandomAccessFile(tmpFile, "rw")) {
+                    accessFile.setLength(dataEnd);
+                    accessFile.write(fastBuffer.hb, 0, dataEnd);
+                    accessFile.getFD().sync();
+                }
                 File cFile = new File(path, name + C_SUFFIX);
                 if (Utils.renameFile(tmpFile, cFile)) {
                     clearDeletedFiles();
@@ -1521,7 +1534,7 @@ public class FastKV {
         }
     }
 
-    void gc(int allocate) {
+    private void gc(int allocate) {
         Collections.sort(invalids);
         mergeInvalids(invalids);
 
@@ -1529,9 +1542,9 @@ public class FastKV {
         final int gcStart = head.start;
         final int newDataEnd = dataEnd - invalidBytes;
         final int newDataSize = newDataEnd - DATA_START;
-        final int updateSize = newDataEnd - gcStart;
+        final int gcUpdateSize = newDataEnd - gcStart;
         final int gcSize = dataEnd - gcStart;
-        final boolean fullChecksum = newDataSize < gcSize + updateSize;
+        final boolean fullChecksum = newDataSize < gcSize + gcUpdateSize;
         if (!fullChecksum) {
             checksum ^= fastBuffer.getChecksum(gcStart, gcSize);
         }
@@ -1539,24 +1552,25 @@ public class FastKV {
         int n = invalids.size();
         final int remain = dataEnd - invalids.get(n - 1).end;
         int shiftCount = (remain > 0) ? n : n - 1;
-        int[] srcToShift = new int[shiftCount << 1];
+        int[] src = new int[shiftCount];
+        int[] shift = new int[shiftCount];
         int desPos = head.start;
         int srcPos = head.end;
         for (int i = 1; i < n; i++) {
             Segment q = invalids.get(i);
             int size = q.start - srcPos;
             System.arraycopy(fastBuffer.hb, srcPos, fastBuffer.hb, desPos, size);
-            int index = (i - 1) << 1;
-            srcToShift[index] = srcPos;
-            srcToShift[index + 1] = srcPos - desPos;
+            int index = i - 1;
+            src[index] = srcPos;
+            shift[index] = srcPos - desPos;
             desPos += size;
             srcPos = q.end;
         }
         if (remain > 0) {
             System.arraycopy(fastBuffer.hb, srcPos, fastBuffer.hb, desPos, remain);
-            int index = (n - 1) << 1;
-            srcToShift[index] = srcPos;
-            srcToShift[index + 1] = srcPos - desPos;
+            int index = n - 1;
+            src[index] = srcPos;
+            shift[index] = srcPos - desPos;
         }
         clearInvalid();
 
@@ -1571,31 +1585,33 @@ public class FastKV {
             aBuffer.putInt(0, -1);
             aBuffer.putLong(4, checksum);
             aBuffer.position(gcStart);
-            aBuffer.put(fastBuffer.hb, gcStart, updateSize);
+            aBuffer.put(fastBuffer.hb, gcStart, gcUpdateSize);
             aBuffer.putInt(0, newDataSize);
             bBuffer.putInt(0, newDataSize);
             bBuffer.putLong(4, checksum);
             bBuffer.position(gcStart);
-            bBuffer.put(fastBuffer.hb, gcStart, updateSize);
+            bBuffer.put(fastBuffer.hb, gcStart, gcUpdateSize);
         } else {
             fastBuffer.putInt(0, newDataSize);
             fastBuffer.putLong(4, checksum);
         }
 
-        updateOffset(gcStart, srcToShift);
         int expectedEnd = newDataEnd + allocate;
         if (fastBuffer.hb.length - expectedEnd > TRUNCATE_THRESHOLD) {
             truncate(expectedEnd);
         }
+
+        updateOffset(gcStart, src, shift);
+
         info(GC_FINISH);
     }
 
-    private void updateOffset(int gcStart, int[] srcToShift) {
+    private void updateOffset(int gcStart, int[] srcArray, int[] shiftArray) {
         Collection<BaseContainer> values = data.values();
         for (BaseContainer c : values) {
             if (c.offset > gcStart) {
-                int index = Utils.binarySearch(srcToShift, c.offset);
-                int shift = srcToShift[(index << 1) + 1];
+                int index = Utils.binarySearch(srcArray, c.offset);
+                int shift = shiftArray[index];
                 c.offset -= shift;
                 if (c.getType() >= DataType.STRING) {
                     ((VarContainer) c).start -= shift;
@@ -1769,7 +1785,7 @@ public class FastKV {
          * Assigned writing mode to SYNC_BLOCKING.
          * <p>
          * In non-blocking mode (write data with mmap),
-         * it might loss update if the system crash or power off before flush data to disk.
+         * it might lose update if the system crash or power off before flush data to disk.
          * You could use {@link #force()} to avoid loss update, or use SYNC_BLOCKING mode.
          * <p>
          * In blocking mode, every update will write all data to the file, which is expensive cost.
