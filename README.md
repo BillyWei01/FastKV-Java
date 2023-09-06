@@ -123,42 +123,34 @@ public class LongListEncoder implements FastKV.Encoder<List<Long>> {
 - 测试机型：华为P30 Pro
 - 测试代码：[Benchmark](https://github.com/BillyWei01/FastKV/blob/main/app/src/main/java/io/fastkv/fastkvdemo/Benchmark.kt)
 
-测试结果如下：
-左边表头为写入方式，上边表头为初始key-value数量（据此构造正态分布的输入序列）, 执行3次，分别求时间总和（单位ms)。
+测试结果如下:
 
 写入：
 
-| kv数量 | SP-commit | DataStore  | SQLiteKV | FastKV-commit | SP-apply | MMKV |FastKV-mmap
-------|---|------------|---|---|---|---|---
- 25   | 121 | 94         | 161 | 107 |  2 | 3 | 1 | 
- 50   | 189 | 226        | 333 | 150 |  10 | 3 | 2 | 
- 100  | 443 | 524        | 663 | 338 |  37 | 6 | 3 | 
- 200  | 773 | 1332       | 1353 | 601 |  109 | 6 | 5 | 
- 400  | 2113 | 4422       | 3159 | 1359 |  279 | 11 | 14 |
- 600  | 4801 | 10066      | 4299 | 2235 |  519 | 15 | 11 | 
+| | 25| 50| 100| 200| 400| 600
+---|---|---|---|---|---|---
+SP-commit | 106| 158| 346| 677| 2230| 4586
+DataStore | 98| 189| 481| 1219| 4050| 8556
+SQLiteKV | 189| 359| 703| 1385| 2943| 7147
+SP-apply | 3| 12| 34| 96| 279| 520
+MMKV | 3| 7| 5| 9| 11| 17
+FastKV | 3| 6| 4| 6| 15| 11
 
 ----
 
 读取：
 
-| kv数量    | SP-commit | DataStore|SQLiteKV | FastKV-commit | SP-apply | MMKV |FastKV-mmap 
------|---|---|---|---|---|---|---
- 25  | 0 | 25 | 112 | 0 |  0 | 0 | 0 | 
- 50  | 1 | 5 | 183 | 1 |  1 | 1 | 1 | 
- 100 | 2 | 2 | 281 | 1 |  1 | 3 | 1 | 
- 200 | 1 | 1 | 480 | 2 |  1 | 3 | 2 | 
- 400 | 1 | 1 | 740 | 3 |  2 | 8 | 1 | 
- 600 | 1 | 2 | 1051 | 2 |  3 | 11 | 1 | 
+| | 25| 50| 100| 200 | 400| 600
+---|---|---|---|-----|---|---
+SP-commit | 1| 4| 2| 1   | 1| 1
+DataStore | 25| 6| 2| 1   | 1| 2
+SQLiteKV | 93| 189| 277| 407 | 728| 1032
+SP-apply | 0| 0| 1| 1   | 2| 3
+MMKV | 0| 1| 3| 3   | 8| 9
+FastKV | 0| 1| 1| 3   | 3| 1
 
-关于谁快谁慢就不一一描述了，这里讲一些别的。
-
-- 前4种写入方式是同步写入，在put方法返回的时候，数据时写入到磁盘了。
-- SP-apply为异步写入，put函数结束时提交了一份数据到队列，并不意味着数据就写入磁盘了。
-- 后两种通过mmap写入，put函数结束后数据就写到内核空间了，除非系统崩溃或者断电，否则数据会在适当时机由系统写入。
-- MMKV在执行写入数据到mmap内存时，如果程序中断，可能会导致文件损坏。
-- SP无论是commit还是apply, 都是将数据提交给QueueWork的一个队列，由一个单例的[HandlerThread](http://androidxref.com/9.0.0_r3/xref/frameworks/base/core/java/android/app/QueuedWork.java#getHandler)执行。而且，整个进程的所有SP都由该单例串行执行。
-- [SQLiteKV](https://github.com/BillyWei01/FastKV/blob/main/app/src/main/java/io/fastkv/fastkvdemo/sqlitekv/SQLiteKV.java) 目前没加内存缓存，所以读取就比较慢，加个HashMap就和其他的差不多了，但是要加内存缓存的话需要加一些编码来标记存入时的类型。
-- SQLite虽然也是”增量写入“，但是相对其他“轻量级”存储而言，执行路径确实比较长，所以总体也是比较耗时的。
+每次执行Benchmark获取到的结果有所浮动，尤其是APP启动后执行多次，部分KV会变快（JIT优化）。<br>
+以上数据是取APP冷启动后第一次Benchmark的数据。
 
 ## 4. 参考链接
 https://juejin.cn/post/7018522454171582500
